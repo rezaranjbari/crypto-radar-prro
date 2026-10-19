@@ -13,29 +13,56 @@ jobs:
 
       - name: Extract project ZIP
         run: |
-          mkdir project
+          mkdir -p project
           unzip -q *.zip -d project
-          echo "Project files:"
-          find project -maxdepth 3 -type f | head -200
 
-      - name: Find Android project
+          echo "=== Project structure ==="
+          find project -maxdepth 4 -type f | head -200
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Find Gradle project
         run: |
-          GRADLEW=$(find project -name gradlew -type f | head -1)
+          echo "Searching for Gradle project..."
 
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: Android Gradle project was not found."
-            echo "The project structure is shown above."
+          GRADLE_FILE=$(find project -name "settings.gradle" -o -name "settings.gradle.kts" | head -1)
+
+          if [ -z "$GRADLE_FILE" ]; then
+            echo "ERROR: No Android/Gradle project found."
+            echo "Checking for build.gradle files:"
+            find project -name "build.gradle" -o -name "build.gradle.kts"
             exit 1
           fi
 
-          chmod +x "$GRADLEW"
-          echo "Found: $GRADLEW"
+          PROJECT_DIR=$(dirname "$GRADLE_FILE")
 
-          cd "$(dirname "$GRADLEW")"
-          ./gradlew assembleDebug
+          echo "Gradle project found at:"
+          echo "$PROJECT_DIR"
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug
+          else
+            echo "gradlew not found. Installing Gradle..."
+            sudo apt-get update
+            sudo apt-get install -y gradle
+            gradle assembleDebug
+          fi
+
+      - name: Find APK
+        run: |
+          echo "=== APK files ==="
+          find project -type f -name "*.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Crypto-Radar-Pro-APK
-          path: "**/build/outputs/apk/**/*.apk"
+          path: "project/**/build/outputs/apk/**/*.apk"
+          if-no-files-found: error
