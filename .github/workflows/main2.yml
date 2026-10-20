@@ -11,59 +11,94 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show repository files
+        run: |
+          echo "=== Repository ==="
+          find . -maxdepth 3 -type f | sort
+
+      - name: Extract Android project
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found."
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP_FILE"
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "=== Extracted files ==="
+          find extracted -maxdepth 5 -type f | sort
+
       - name: Find Android project
         run: |
           set -e
 
-          echo "=== Searching for Android project ==="
-
           PROJECT_DIR=""
 
-          if [ -f "gradlew" ]; then
-            PROJECT_DIR="."
-          elif [ -f "project/crp/settings.gradle.kts" ]; then
-            PROJECT_DIR="project/crp"
-          else
-            PROJECT_DIR=$(find . -name "settings.gradle.kts" -type f -print -quit | xargs -r dirname)
+          SETTINGS_FILE=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            BUILD_FILE=$(find extracted -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
+
+            if [ -n "$BUILD_FILE" ]; then
+              PROJECT_DIR=$(dirname "$BUILD_FILE")
+            fi
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android Gradle project not found."
-            find . -maxdepth 5 -type f | sort
+            echo "=== Extracted ZIP contents ==="
+            find extracted -maxdepth 8 -type f | sort
             exit 1
           fi
 
-          echo "Android project found at: $PROJECT_DIR"
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Generate Gradle Wrapper
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Check Gradle project
         run: |
           set -e
 
-          echo "=== Generating Gradle Wrapper ==="
+          cd "$PROJECT_DIR"
 
-          gradle wrapper
+          echo "=== Project files ==="
+          find . -maxdepth 3 -type f | sort
 
-          chmod +x gradlew
+          echo "=== Checking Gradle wrapper ==="
 
-          echo "=== Gradle Wrapper created ==="
-          ls -la
-          ls -la gradlew
+          if [ ! -f "./gradlew" ]; then
+            echo "gradlew not found. Generating Gradle wrapper..."
+
+            if ! command -v gradle >/dev/null 2>&1; then
+              echo "Installing Gradle..."
+              sudo apt-get update
+              sudo apt-get install -y gradle
+            fi
+
+            gradle wrapper
+          fi
+
+          chmod +x ./gradlew
 
       - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
+
+          cd "$PROJECT_DIR"
 
           echo "=== Building APK ==="
 
@@ -73,13 +108,13 @@ jobs:
         run: |
           set -e
 
-          echo "=== Searching for APK ==="
-
+          echo "=== APK files ==="
           find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Crypto-Radar-Pro-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          name: crypto-radar-pro-apk
+          path: |
+            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
