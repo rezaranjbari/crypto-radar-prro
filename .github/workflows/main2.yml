@@ -11,56 +11,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repository files
-        run: |
-          echo "=== Repository ==="
-          find . -maxdepth 3 -type f | sort
-
-      - name: Extract Android project
+      - name: Find ZIP
+        shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          echo "=== Finding project ZIP ==="
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP found: $ZIP_FILE"
 
-          rm -rf extracted
           mkdir -p extracted
-
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo "=== Extracted files ==="
-          find extracted -maxdepth 5 -type f | sort
+          echo "=== ZIP contents ==="
+          find extracted -maxdepth 4 -type f | sort | head -200
 
       - name: Find Android project
+        shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
+          echo "=== Searching for Android project ==="
 
-          SETTINGS_FILE=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          GRADLE_FILE=$(find extracted -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+            -not -path "*/build/*" | head -n 1)
 
-          if [ -n "$SETTINGS_FILE" ]; then
-            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            BUILD_FILE=$(find extracted -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
-
-            if [ -n "$BUILD_FILE" ]; then
-              PROJECT_DIR=$(dirname "$BUILD_FILE")
-            fi
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
+          if [ -z "$GRADLE_FILE" ]; then
             echo "ERROR: Android Gradle project not found."
-            echo "=== Extracted ZIP contents ==="
-            find extracted -maxdepth 8 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLE_FILE")
+
+          while [ "$PROJECT_DIR" != "." ] && [ "$PROJECT_DIR" != "/" ]; do
+            if [ -f "$PROJECT_DIR/settings.gradle" ] || [ -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+              break
+            fi
+            PROJECT_DIR=$(dirname "$PROJECT_DIR")
+          done
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts not found."
             exit 1
           fi
 
@@ -69,32 +67,73 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Check Gradle project
+      - name: Prepare Gradle
+        shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
           echo "=== Project files ==="
-          find . -maxdepth 3 -type f | sort
+          ls -la
 
-          echo "=== Checking Gradle wrapper ==="
+          if [ ! -f "gradlew" ]; then
+            echo "ERROR: gradlew not found."
 
-          if [ ! -f "./gradlew" ]; then
-            echo "gradlew not found. Generating Gradle wrapper..."
+            if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              echo "Gradle wrapper properties found, generating wrapper..."
 
-            if ! command -v gradle >/dev/null 2>&1; then
-              echo "Installing Gradle..."
-              sudo apt-get update
-              sudo apt-get install -y gradle
+              gradle wrapper
+
+            else
+              echo "ERROR: Gradle wrapper is missing."
+              exit 1
             fi
-
-            gradle wrapper
           fi
 
-          chmod +x ./gradlew
+          chmod +x gradlew
+
+      - name: Create debug keystore
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=== Creating debug keystore ==="
+
+          keytool -genkeypair \
+            -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          echo "Debug keystore created:"
+          ls -lh debug.keystore
+
+      - name: Check Google Services
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=== Checking google-services.json ==="
+
+          if [ -f "app/google-services.json" ]; then
+            echo "google-services.json found."
+          else
+            echo "WARNING: google-services.json is missing."
+            echo "Continuing because the build may not require Firebase at runtime."
+          fi
 
       - name: Build APK
+        shell: bash
         run: |
           set -e
 
@@ -105,16 +144,19 @@ jobs:
           ./gradlew assembleDebug --stacktrace
 
       - name: Find APK
+        shell: bash
         run: |
           set -e
 
-          echo "=== APK files ==="
+          echo "=== Searching for APK ==="
+
           find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: crypto-radar-pro-apk
+          name: Crypto-Radar-Pro-debug
           path: |
-            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+            **/build/outputs/apk/**/*.apk
+            **/build/outputs/apk/*.apk
           if-no-files-found: error
