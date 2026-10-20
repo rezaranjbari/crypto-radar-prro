@@ -5,145 +5,94 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Find ZIP file
+        run: |
+          echo "=== Files in repository ==="
+          find . -maxdepth 2 -type f | sort
+
       - name: Extract project ZIP
-        shell: bash
         run: |
           set -e
 
-          mkdir -p project
-
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP project file not found."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "Found ZIP: $ZIP_FILE"
 
+          mkdir -p project
           unzip -q "$ZIP_FILE" -d project
 
-          echo "=== Project structure ==="
-          find project -maxdepth 5 -type f | head -300
+          echo "=== Extracted files ==="
+          find project -maxdepth 3 -type f | sort | head -200
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Find Android Gradle project
-        shell: bash
+      - name: Find Gradle project
         run: |
           set -e
 
           echo "=== Searching for Gradle project ==="
 
-          SETTINGS_FILE=$(find project -type f \( \
-            -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-          \) | head -1)
+          GRADLE_FILE=$(find project -type f \( -name "gradlew" -o -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
-
-            echo "=== Build files ==="
-            find project -type f \( \
-              -name "build.gradle" \
-              -o -name "build.gradle.kts" \
-            )
-
-            echo "=== Android manifests ==="
-            find project -type f -name "AndroidManifest.xml"
-
+          if [ -z "$GRADLE_FILE" ]; then
+            echo "ERROR: Gradle project was not found."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          PROJECT_DIR=$(dirname "$GRADLE_FILE")
 
-          echo "Gradle project:"
-          echo "$PROJECT_DIR"
+          while [ "$PROJECT_DIR" != "." ] && [ "$PROJECT_DIR" != "/" ]; do
+            if [ -f "$PROJECT_DIR/gradlew" ]; then
+              break
+            fi
+            PROJECT_DIR=$(dirname "$PROJECT_DIR")
+          done
+
+          echo "Gradle project directory: $PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Make Gradle executable
+        run: |
+          set -e
 
-      - name: Build Android APK
-        shell: bash
+          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
+            echo "ERROR: gradlew not found."
+            exit 1
+          fi
+
+          chmod +x "$PROJECT_DIR/gradlew"
+
+      - name: Build APK
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "=== Project directory ==="
-          pwd
+          echo "=== Starting Gradle build ==="
 
-          echo "=== Files ==="
-          ls -la
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            GRADLE="./gradlew"
-          else
-            echo "gradlew not found."
-            GRADLE="gradle"
-          fi
-
-          echo "=== Available tasks ==="
-          $GRADLE tasks --all
-
-          echo "=== Searching for Android APK tasks ==="
-
-          TASKS=$($GRADLE tasks --all | grep -E \
-            'assemble.*(Debug|debug)|bundle.*(Debug|debug)' \
-            | awk '{print $1}' \
-            | head -20 || true)
-
-          echo "Candidate tasks:"
-          echo "$TASKS"
-
-          if [ -z "$TASKS" ]; then
-            echo "ERROR: No Android APK build task was found."
-            exit 1
-          fi
-
-          BUILD_TASK=$(echo "$TASKS" | grep -E '^assemble.*Debug$' | head -1 || true)
-
-          if [ -z "$BUILD_TASK" ]; then
-            BUILD_TASK=$(echo "$TASKS" | head -1)
-          fi
-
-          echo "=== Building with task ==="
-          echo "$BUILD_TASK"
-
-          $GRADLE "$BUILD_TASK" --stacktrace
+          ./gradlew assembleDebug --stacktrace
 
       - name: Find APK
-        shell: bash
         run: |
-          echo "=== Searching for APK files ==="
+          set -e
 
-          find . -type f -name "*.apk" -print
+          echo "=== Searching for APK ==="
 
-          APK_COUNT=$(find . -type f -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No APK was produced."
-            exit 1
-          fi
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Crypto-Radar-Pro-APK
-          path: |
-            project/**/*.apk
-            **/build/outputs/apk/**/*.apk
+          name: Crypto-Radar-APK
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
