@@ -11,55 +11,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract project ZIP
-        run: |
-          set -e
-
-          mkdir -p project
-
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
-            exit 1
-          fi
-
-          unzip -q "$ZIP_FILE" -d project
-
-          echo "=== Project files ==="
-          find project -maxdepth 3 -type f | head -100
-
       - name: Find Android project
         run: |
           set -e
 
-          echo "=== Searching for Gradle project ==="
+          echo "=== Searching for Android project ==="
 
-          GRADLE_FILE=$(find project -type f -name "gradlew" | head -n 1)
+          PROJECT_DIR=""
 
-          if [ -z "$GRADLE_FILE" ]; then
-            echo "ERROR: gradlew not found."
-            echo "The ZIP does not contain an Android Gradle project."
-            echo "=== ZIP contents ==="
-            find project -maxdepth 4 -type f | head -200
+          if [ -f "gradlew" ]; then
+            PROJECT_DIR="."
+          elif [ -f "project/crp/settings.gradle.kts" ]; then
+            PROJECT_DIR="project/crp"
+          else
+            PROJECT_DIR=$(find . -name "settings.gradle.kts" -type f -print -quit | xargs -r dirname)
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android Gradle project not found."
+            find . -maxdepth 5 -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLE_FILE")
-
-          echo "Gradle wrapper found:"
-          echo "$GRADLE_FILE"
-
+          echo "Android project found at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Make gradlew executable
-        run: |
-          chmod +x "$PROJECT_DIR/gradlew"
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      - name: Build APK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
-          cd "$PROJECT_DIR"
+
+          echo "=== Generating Gradle Wrapper ==="
+
+          gradle wrapper
+
+          chmod +x gradlew
+
+          echo "=== Gradle Wrapper created ==="
+          ls -la
+          ls -la gradlew
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          echo "=== Building APK ==="
 
           ./gradlew assembleDebug --stacktrace
 
@@ -67,20 +73,13 @@ jobs:
         run: |
           set -e
 
-          APK=$(find "$PROJECT_DIR" -type f -name "*.apk" | head -n 1)
+          echo "=== Searching for APK ==="
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not created."
-            exit 1
-          fi
-
-          echo "APK found:"
-          echo "$APK"
-
-          cp "$APK" "$GITHUB_WORKSPACE/CryptoRadarPro.apk"
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CryptoRadarPro
-          path: CryptoRadarPro.apk
+          name: Crypto-Radar-Pro-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
